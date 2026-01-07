@@ -471,6 +471,17 @@ def match_expenses_to_excel(excel_path: Path, expenses: List[Dict], dry_run: boo
                         if re.search(word_pattern, desc):
                             matched = True
 
+            # Strategy 3: Vendor name appears in URL/domain (e.g., ANTHROPIC in ANTHROPIC.COM or SUBSCRIPANTHROPIC)
+            if not matched:
+                skip_words = {'THE', 'A', 'AN'}
+                vendor_words = [w for w in vendor.split() if w not in skip_words]
+                if vendor_words:
+                    first_word = vendor_words[0]
+                    if len(first_word) >= 5:  # Only for longer words to avoid false positives
+                        # Check if vendor appears anywhere (for embedded in URLs)
+                        if first_word in desc:
+                            matched = True
+
             if matched and row_date.month == exp_date.month and row_date.year == exp_date.year:
                 matches.append({
                     'excel_idx': idx,
