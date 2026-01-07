@@ -448,9 +448,30 @@ def match_expenses_to_excel(excel_path: Path, expenses: List[Dict], dry_run: boo
                 continue
 
             # Match by vendor name in description and same month/year
-            # Use word boundary matching to avoid partial matches (e.g., "EE" in "FEE")
+            # Try multiple matching strategies:
+            # 1. Full vendor name with word boundaries
+            # 2. First significant word of vendor (skip "The", "A", etc.)
+            # 3. Any word from vendor name that's 4+ chars (to avoid short matches like "EE")
+            matched = False
+
+            # Strategy 1: Full vendor name
             vendor_pattern = r'\b' + re.escape(vendor) + r'\b'
-            if re.search(vendor_pattern, desc) and row_date.month == exp_date.month and row_date.year == exp_date.year:
+            if re.search(vendor_pattern, desc):
+                matched = True
+
+            # Strategy 2: First significant word (skip common prefixes)
+            if not matched:
+                skip_words = {'THE', 'A', 'AN'}
+                vendor_words = [w for w in vendor.split() if w not in skip_words]
+                if vendor_words:
+                    first_word = vendor_words[0]
+                    if len(first_word) >= 4:  # Only match words 4+ chars
+                        # Use looser match - word starts with vendor word (handles FIREBRANDT matching FIREBRAND)
+                        word_pattern = r'\b' + re.escape(first_word)
+                        if re.search(word_pattern, desc):
+                            matched = True
+
+            if matched and row_date.month == exp_date.month and row_date.year == exp_date.year:
                 matches.append({
                     'excel_idx': idx,
                     'excel_date': row_date,
