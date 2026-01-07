@@ -89,9 +89,18 @@ def extract_with_ai(text: str) -> Dict[str, Any]:
 
 FIRST, determine the document type:
 1. "bank_statement" - A bank statement showing account transactions over a period
-2. "expense" - A receipt, bill, or invoice FROM another company (expense to be paid/already paid)
-3. "sprintpoint_invoice" - An invoice issued BY SprintPoint Ltd (outgoing invoice)
-4. "incoming_invoice" - An invoice TO SprintPoint Ltd for services rendered (e.g., from TalentHawk, contractors)
+2. "expense" - A receipt, bill, or invoice that SprintPoint must PAY (e.g., software subscriptions, office rent, coworking space, utilities, supplies, travel expenses, phone bills)
+3. "sprintpoint_invoice" - An invoice issued BY SprintPoint Ltd to a client (outgoing invoice)
+4. "incoming_invoice" - An invoice for contractor/consultant services where SprintPoint will RECEIVE payment (e.g., TalentHawk invoices for contractor work billed to clients). These typically have large amounts (thousands of pounds) and reference consulting/contractor work.
+
+KEY DISTINCTION for expenses vs incoming_invoice:
+- "expense" = SprintPoint PAYS this (coworking space rent, subscriptions, phone bills, etc.)
+- "incoming_invoice" = SprintPoint RECEIVES payment for this (contractor invoices like TalentHawk for work done for clients)
+
+If in doubt between expense and incoming_invoice, consider:
+- Small recurring amounts (under £500) are usually expenses
+- References to "TalentHawk", "Talent Hawk", or contractor services = incoming_invoice
+- Coworking space, office rent, subscriptions = expense
 
 THEN extract the relevant information:
 
@@ -108,7 +117,7 @@ For EXPENSES:
 For SPRINTPOINT INVOICES:
 - Just identify it as type "sprintpoint_invoice"
 
-For INCOMING INVOICES (invoices TO SprintPoint for payment):
+For INCOMING INVOICES (contractor invoices where SprintPoint receives payment):
 - vendor: The company that issued the invoice (e.g., "TalentHawk", "Talent Hawk Limited")
 - invoice_number: The invoice number/reference
 - amount: The total amount (just the number, e.g., 21841.25)
