@@ -32,6 +32,7 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Tuple, Dict, Any, List
+from collections import defaultdict
 
 try:
     import pdfplumber
@@ -113,6 +114,7 @@ For EXPENSES:
 - vendor: The company that issued the document (use well-known brand names, not legal entities)
   Examples: Use "Uber" not "DÉCADA OUSADA LDA", "Amazon" not "Amazon EU S.à r.l."
 - date: The document date in YYYY-MM-DD format
+- amount: The total amount paid (just the number, e.g., 29.99)
 
 For SPRINTPOINT INVOICES:
 - Just identify it as type "sprintpoint_invoice"
@@ -128,7 +130,7 @@ Return ONLY a JSON object:
   "document_type": "bank_statement" | "expense" | "sprintpoint_invoice" | "incoming_invoice",
   // Include relevant fields based on type:
   // For bank_statement: "bank_name", "start_date", "end_date"
-  // For expense: "vendor", "date"
+  // For expense: "vendor", "date", "amount"
   // For incoming_invoice: "vendor", "invoice_number", "amount", "date"
 }}
 
@@ -352,16 +354,20 @@ def process_document(pdf_path: Path, dry_run: bool = False, excel_path: Optional
         if not date:
             return False, "Could not identify document date", None
 
+        amount = doc_info.get("amount")
+
         print(f"  Type: Expense")
         print(f"  Vendor: {vendor}")
         print(f"  Date: {date}")
+        if amount:
+            print(f"  Amount: {amount}")
 
         # Build filename: VendorName_Date.pdf
         safe_vendor = sanitize_filename(vendor)
         base_name = f"{safe_vendor}_{date}"
 
-        # Store expense info for Excel matching
-        expense_info = {"vendor": vendor, "date": date}
+        # Store expense info for Excel matching (including amount for combined matching)
+        expense_info = {"vendor": vendor, "date": date, "amount": amount}
 
     else:
         return False, f"Unknown document type: {doc_type}", None
@@ -435,6 +441,11 @@ def match_expenses_to_excel(excel_path: Path, expenses: List[Dict], dry_run: boo
     matches = []
     for exp in expenses:
         vendor = exp['vendor'].upper()
+
+        # Skip Amazon - handled separately by combined total matching
+        if vendor == 'AMAZON':
+            continue
+
         try:
             exp_date = pd.Timestamp(exp['date'])
         except:
@@ -508,6 +519,80 @@ def match_expenses_to_excel(excel_path: Path, expenses: List[Dict], dry_run: boo
             print(f"\n(Dry run - Excel file not modified)")
     else:
         print("No matches found")
+
+    # Amazon combined total matching
+    # Group Amazon expenses by date and match combined total against Excel by amount
+    # (bank dates differ from invoice dates, so we match by amount within same month)
+    amazon_expenses = [e for e in expenses if e['vendor'].upper() == 'AMAZON' and e.get('amount')]
+    if amazon_expenses:
+        print(f"\n{'='*50}")
+        print("Amazon combined total matching:")
+
+        # Group by date
+        amazon_by_date = defaultdict(list)
+        for exp in amazon_expenses:
+            amazon_by_date[exp['date']].append(exp)
+
+        amazon_matches = 0
+        matched_excel_rows = set()  # Track which Excel rows we've matched
+
+        for date, date_expenses in amazon_by_date.items():
+            # Sum amounts for this date
+            try:
+                combined_total = sum(float(e['amount']) for e in date_expenses)
+            except (ValueError, TypeError):
+                print(f"  Warning: Could not parse amounts for Amazon expenses on {date}")
+                continue
+
+            print(f"\n  Date: {date}")
+            for e in date_expenses:
+                print(f"    - £{e['amount']}")
+            print(f"    Combined total: £{combined_total:.2f}")
+
+            # Find matching Excel entry by amount (within same month/year)
+            try:
+                exp_date = pd.Timestamp(date)
+            except:
+                continue
+
+            tolerance = 0.01
+            for idx, row in df.iterrows():
+                # Skip already matched rows
+                if idx in matched_excel_rows:
+                    continue
+
+                desc = str(row['Description']).upper()
+                # Check if it's an Amazon entry
+                if 'AMZN' not in desc and 'AMAZON' not in desc:
+                    continue
+
+                try:
+                    row_date = pd.Timestamp(row['Date'])
+                except:
+                    continue
+
+                # Must be same month/year (bank dates differ from invoice dates)
+                if row_date.month != exp_date.month or row_date.year != exp_date.year:
+                    continue
+
+                row_amount = float(row['Amount']) if pd.notna(row['Amount']) else 0
+                # Expenses are negative in Excel, so compare absolute values
+                if abs(abs(row_amount) - combined_total) < tolerance:
+                    print(f"    Matched to: {row['Description'][:40]}... ({row_date.strftime('%Y-%m-%d')})")
+
+                    matched_excel_rows.add(idx)
+                    if not dry_run:
+                        df.at[idx, 'Uploaded'] = 'Yes'
+                        df.to_excel(excel_path, index=False)
+                        print(f"    Excel updated: Uploaded = Yes")
+
+                    amazon_matches += 1
+                    break
+            else:
+                print(f"    No matching Excel entry found for combined total")
+
+        if amazon_matches > 0:
+            print(f"\nAmazon: {amazon_matches} date(s) matched by combined total")
 
     return len(matches)
 
