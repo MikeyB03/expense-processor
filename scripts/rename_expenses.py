@@ -501,6 +501,82 @@ def match_expenses_to_excel(excel_path: Path, expenses: List[Dict], dry_run: boo
     return len(matches)
 
 
+def auto_mark_no_receipt_entries(excel_path: Path, dry_run: bool = False) -> int:
+    """
+    Auto-mark Excel entries that don't require receipts as 'Uploaded: Yes'.
+    These include internal transfers, tax payments, salary, loans, etc.
+    Returns the number of entries marked.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return 0
+
+    if not excel_path.exists():
+        return 0
+
+    # Keywords that indicate entries that don't need receipts
+    no_receipt_keywords = [
+        'ACCOUNT IT',
+        'ACCOUNTING IT',
+        'BARTLEY FAMILY',
+        'BARTLEY MICHAEL',
+        'MICHAEL BARTLEY',
+        'HMRC',
+        'DIRECTOR',  # Catches "Directors' loan", "Director loan", etc.
+        'SALARY',
+        'WAGES',
+        'PAYE',
+        'PENSION',
+        'TAX',
+    ]
+
+    df = pd.read_excel(excel_path)
+
+    if 'Description' not in df.columns:
+        return 0
+    if 'Uploaded' not in df.columns:
+        df['Uploaded'] = None
+
+    marked_count = 0
+    marked_entries = []
+
+    for idx, row in df.iterrows():
+        # Skip if already marked
+        if pd.notna(row.get('Uploaded')) and row['Uploaded'] == 'Yes':
+            continue
+
+        desc = str(row.get('Description', '')).upper()
+
+        # Check if any keyword matches
+        for keyword in no_receipt_keywords:
+            if keyword in desc:
+                marked_entries.append({
+                    'idx': idx,
+                    'desc': row['Description'],
+                    'keyword': keyword
+                })
+                break
+
+    if marked_entries:
+        print(f"\n{'='*50}")
+        print(f"Auto-marking entries that don't require receipts:")
+
+        for entry in marked_entries:
+            print(f"  [{entry['keyword']}] {entry['desc'][:50]}...")
+            if not dry_run:
+                df.at[entry['idx'], 'Uploaded'] = 'Yes'
+            marked_count += 1
+
+        if not dry_run:
+            df.to_excel(excel_path, index=False)
+            print(f"\nMarked {marked_count} entries as 'Uploaded: Yes'")
+        else:
+            print(f"\n(Dry run - would mark {marked_count} entries)")
+
+    return marked_count
+
+
 def match_invoice_to_excel(excel_path: Path, amount: float, dry_run: bool = False) -> Optional[Dict]:
     """
     Match an invoice by exact amount to a credit entry in Excel.
@@ -596,6 +672,13 @@ def main():
         print(f"Error: Path is not a directory: {folder}")
         sys.exit(1)
 
+    # Get excel path if provided (needed for invoice matching)
+    excel_path = Path(args.excel).expanduser().resolve() if args.excel else None
+
+    # Auto-mark entries that don't require receipts (salary, tax, internal transfers, etc.)
+    if excel_path:
+        auto_mark_no_receipt_entries(excel_path, args.dry_run)
+
     # Find all PDF files
     pdf_files = list(folder.glob("*.pdf")) + list(folder.glob("*.PDF"))
 
@@ -612,9 +695,6 @@ def main():
     success_count = 0
     fail_count = 0
     processed_expenses = []
-
-    # Get excel path if provided (needed for invoice matching)
-    excel_path = Path(args.excel).expanduser().resolve() if args.excel else None
 
     for pdf_path in sorted(pdf_files):
         success, message, expense_info = process_document(pdf_path, args.dry_run, excel_path)
